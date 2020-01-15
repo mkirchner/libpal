@@ -1,0 +1,351 @@
+=== [ libpal - packet assembly manual ] ===
+
+---
+$Id: libpal.txt,v 1.2 2002/02/20 10:48:54 mkirchner Exp $
+---
+
+-=[ Introduction
+
+Building packets with libpal is easy. Nevertheless you need basic 
+knowledge about how TCP/IP packets are organized. 
+
+This is a step-by-step manual on how to build packets using libpal. It 
+does NOT cover all kinds of packets that can be built. If you need more 
+complex or more special packets, you probably won't need this manual 
+anyway. :-) Read libpal.h, then. Complete interface definitions (some even 
+documented) can be found there and in packet.c.
+
+Play with it. Try. And _please_ submit bug reports. Thanks!
+
+-=[ Building packets
+
+
+To be able to use libpal you will have to include it in your source code
+
+	#include <libpal.h>
+
+The basic concept of libpal is to use a kind of struct which 
+represents a packet. This struct is a parameter to (nearly) all library 
+functions libpal provides.
+
+	struct packet pkt;
+
+The same idea has been used to represent a socket on your machine. In 
+order not only to build but also to send packets, a struct pkt_socket 
+variable is required. Internally this is necessary to access the 
+network and to tell the kernel which network interface to use. You will 
+find out more about this later.
+
+	struct pkt_socket sck;
+
+Now you will have to initialize the packet variable you created above. 
+Here things start to go in different directions, depending on which kind 
+of packet you are going to build.
+
+
+---=[ 1. TCP packets
+
+TCP packets look like this: 
++---------+---------+------------------------------+
+|   IP    |  TCP    |                              |
+| header  | header  |            payload           |
+| 20bytes | 20bytes |                              |
++---------+---------+------------------------------+
+Ethernet header and trailer have been left out as these parts cannot be 
+altered using libpal (not yet, at least :-).
+
+To initialize a TCP packet you use
+
+	pkt_init(&pkt, PKT_NET_IP | PKT_TRANS_TCP, #size#);
+
+where #size# denotes the final overall size of the IP datagram, including 
+TCP header and payload. pkt_init needs to know #size#, because one of 
+its main jobs is to allocate the appropriate amount of memory for the 
+packet you are going to build. The internal packet pointer will point to 
+the beginning of the new packet (byte number 0). 
+
+The steps you now have to take are:
+	- build an IP header
+	- build a TCP header
+	- fill in payload
+	- checksum TCP header
+
+The order of the first three steps does not matter, they are 
+interchangeable. Checksumming the TCP header, however, requires you to 
+have completely filled in your TCP data, otherwise it won't be checksummed 
+correctly. (This assumes you want correct checksums).
+To come back to our example, let's start with IP, then TCP:
+
+	pkt_ip_header(&pkt, 5, 4, 0, 44, 0, 0, 255, IPPROTO_TCP, 0, 
+			inet_addr("192.168.1.1"), inet_addr("127.0.0.1"));
+
+This will create an IP header with 
+	IP header size		= 	5 32bit words (=20 bytes)
+	protocol version	= 	4
+	TOS			= 	0x00
+	IP datagram total size	= 	44 bytes
+	IP id			=	0
+	IP fragment offset	=	0x0/0x0/0x0/0
+	TTL			=	255
+	encapsulated protocol	=	IPPROTO_TCP (=6)
+	IP checksum		=	0
+	IP source address	=	32bit numerical equivalent to
+					"192.168.1.1"
+	IP destination address	=	32bit numerical equivalent to
+					"127.0.0.1"
+	
+Now that your IP header has been built, you will have to "move" within 
+your packet, to have the internal packet pointer (located in pkt) point to 
+the correct position to insert a TCP header:
+
+	pkt_move_actptr(&pkt, 20);
+
+This moves the pointer forward by 20 bytes, which happens to be the 
+size of the IP header you created. This is correct because you want your 
+TCP header to start directly after the IP header.
+Now build the TCP header:
+
+	pkt_tcp_header(&pkt, 22, 22, 123, 4, 5, 0, TH_ACK, 4096, 0, 0);
+
+This will create a TCP header with the following settings:
+	TCP source port		=	22 (ssh)
+	TCP destination port	=	22 (ssh)
+	sequence number		=	123
+	acknowledgment number	=	4
+	TCP header length	=	5 32bit-words (=20 bytes)
+	reserved (unused)	=	0
+	TCP flags		=	TH_ACK (0x10)
+	window size		=	4096
+	TCP checksum		=	0
+	urgent pointer		=	0
+
+If you are going to calculate the TCP checksum later (after having added 
+the payload), just set the TCP checksum field to 0 (or any other value). 
+It will be overwritten. The parameter is provided to allow predefined (or 
+just wrong) checksums, mainly for testing purposes.
+
+Before adding payload to you packet you must not forget to (again!) move 
+the internal packet pointer to the correct position:
+
+	pkt_move_actptr(&pkt, 20);
+
+This will place the pointer to the start of the TCP data section. To add 
+payload use 
+
+	pkt_add_data(&pkt, #data#, #data_len#);
+
+where #data# is of char* and points to the memory area which hold your 
+payload data. #data_len# denotes how many bytes you want to copy from 
+#data# into your packet.
+
+Having finished this, you can now calcualte the TCP checksum. To be able 
+to do that it is essetially necessary to know the destination and source 
+IP (!!) address of the packet. (This is because of the way the TCP 
+checksum is computed). Further, make sure the internal packet pointer 
+points to the beginning of the TCP header.
+
+	pkt_set_actptr(&pkt, 20);
+	pkt_tcp_cksum(&pkt, "192.168.1.1", "127.0.0.1", #size#);
+
+#size# tells the checksum algorithm how many bytes to checksum and is 
+calculated as
+	size = TCP header size + payload length.
+
+After your TCP packet has finally been built now, you will probably want 
+to send it somewhere. This, again, needs some preparation.
+You will have to open a socket, prepare it and off you go. Opening a 
+socket is accomplished with
+
+	pkt_socket_open(&sck, #type#);
+
+where #type# stands for the type of network access you want to use. 
+Available types are SOCK_RAW (=PKT_RAW), SOCK_STREAM (=PKT_STREAM) and 
+SOCK_DGRAM(=PKT_DGRAM). However, using one of the latter two does not make 
+any sense as for these types standard socket operations are defined and 
+available (see read(2), write(2) and may others). Thus your line should 
+always look like 
+
+	pkt_socket_open(&sck, PKT_RAW);
+
+libpal does not provide direct link layer access, thus it is necessary to 
+provide routing information to the kernel, which will enable the kernel to 
+choose the correct outgoing interface. This is done with a call to 
+pkt_socket_prepare:
+
+	pkt_socket_prepare(&sck, "127.0.0.1");
+
+This is the correct line for our example, as the destiantion IP address is 
+127.0.0.1 (see further up).
+
+Now, enough preparation: we are ready to fire.
+
+	pkt_send(&pkt, &sck);
+
+That's it. Now, don't forget to be a good programmer and clean up. This 
+includes closing the socket and freeing the allocated packet memory:
+
+	pkt_socket_close(&sck);
+	pkt_free(&pkt);
+
+Now that you have seen the "basic" way how to do it, you might wonder: 
+"what about error handling...?" There is an entire paragraph on this topic 
+further down.
+
+---=[ 2. UDP packets
+
++---------+---------+------------------------------+
+|   IP    |  UDP    |                              |
+| header  | header  |            payload           |
+| 20bytes | 8 bytes |                              |
++---------+---------+------------------------------+
+
+Building UDP packets is very similar to building TCP packets.
+
+Set up necessary variables:
+
+	struct packet pkt;
+	struct pkt_socket sck;
+
+Set up packet type:
+
+	pkt_init(&pkt, PKT_NET_IP | PKT_TRANS_UDP, 28);
+
+IP header:
+
+	pkt_ip_header(&pkt, 5, 4, 0, 28, 0, 0, 255, IPPROTO_UDP, 0, 
+			inet_addr(SRC), inet_addr(DST));
+
+Now build the UDP header at the correct position:
+
+	pkt_move_actptr(&pkt, 20);
+	pkt_udp_header(&pkt, 53, 64324, 8, 0);
+
+This will build a UDP header with
+	
+	UDP source port		=	53 (dns)
+	UDP destination port	=	64324
+	total len of UDP packet	=	8 bytes
+	checksum		=	0
+
+Similar to TCP, if you want to calculate a correct checksum later, the 
+checksum value you enter here will not have any effect and will be 
+overwritten. Raw data can be added using pkt_add_data(). See above.
+
+To checksum the UDP packet source and destination address have to be 
+provided.
+
+	pkt_udp_cksum(&pkt, "192.168.1.1", "127.0.0.1", 8);
+
+Again, open a socket and prepare it.
+
+	pkt_socket_open(&sck, PKT_RAW);
+	pkt_socket_prepare(&sck, "127.0.0.1");
+
+Fire.
+
+	pkt_send(&pkt, &sck);
+
+Clean up.
+
+	pkt_socket_close(&sck);
+	pkt_free(&pkt);
+
+
+
+---=[ 3. ICMP packets
+
++---------+-------------------+
+|   IP    |       ICMP        |
+| header  |      packet       |
+| 20bytes |  variable length  |
++---------+-------------------+
+
+ICMP messages all share a common header that is built using the 
+pkt_icmp_header function. To cope with the different ICMP types and codes 
+multiple sparate functions are provided. Thus building an ICMP message 
+ALWAYS includes at least two function calls. One to build the common 
+header and one to forge the packet.
+
+Set up packet and IP header
+
+	pkt_init(&pkt, PKT_NET_IP, 56);
+	pkt_ip_header(&pkt, 5, 4, 0, 56, 0, 0, 255, IPPROTO_ICMP, 0, 
+			inet_addr("192.168.1.1"), inet_addr("127.0.0.1"));
+
+Move to start if ICMP header and build it.
+
+	pkt_move_actptr(&pkt, 20);
+	pkt_icmp_header(&pkt, ICMP_REDIRECT, ICMP_REDIR_HOST, 0);
+
+This builds an ICMP header with trhe type of a redirect message with code 
+ICMP_REDIR_HOST. A list of all types and codes can be found int 
+/usr/include/netinet/ip_icmp.h.
+
+	pkt_icmp_redirect(&pkt, 0, "123.234.123.234");
+
+This sets the router IP inside the redirect packet to "123.234.123.234".
+Inside an ICMP redirect we find the IP header that caused the error.
+
+	pkt_move_actptr(&pkt, 8);
+	pkt_ip_header(&pkt, 5, 4, 0, 257, 0, 0, 248, IPPROTO_UDP, 0xdead, 
+			inet_addr(DST), inet_addr(SRC));
+
+And 8 bytes of the original datagram data. 
+
+	pkt_move_actptr(&pkt, 20);
+	pkt_add_data(&pkt, "get lost", 8);
+	
+We move back to the start of the ICMP message and build the ICMP checksum.
+
+	pkt_set_actptr(&pkt, 20);
+	pkt_icmp_cksum(&pkt, 36);
+
+Open and prepare a socket:
+
+	pkt_socket_open(&sck, PKT_RAW);
+	pkt_socket_prepare(&sck, "127.0.0.1");
+
+Fire.
+
+	pkt_send(&pkt, &sck);
+
+Clean up.
+
+	pkt_socket_close(&sck);
+	pkt_free(&pkt);
+
+
+-=[ Error handling
+
+It has been take care to make sure the provided library functions won't 
+accidentally segfault. To make sure of this, _always_ use the provided 
+functions to move/set pointer(s) inside packet structs - these functions 
+include bounds checking. Do not expect your code to be safe if you access 
+internal libpal structures directly. (As long as your libpal release is 
+alpha, you should probably not expect stability, anyways. :-))
+
+All functions return an int value to indicate success (0) or failure (<0).
+There are a few predefined error values:
+
+EPKTRANGE
+	This error value is returned when e.g. a 
+	set/move/add_data/whatever operation tries to write or jump beyond 
+	the packets' bounds.
+
+EERRNO
+	indicates that an error occured. To find out more about the error, 
+	consult the errno variable (which has been set by the syscall that 
+	failed)
+
+EPKTINVALPTR
+	the pkt pointer which was passed in the functions interface is 
+	invalid (=NULL).
+
+
+-=[ Examples / Code
+
+Example code can be found in debug/.
+
+-=[ Author
+Marc Kirchner <kirchner@stud.fh-heilbronn.de>
+http://libpal.sourceforge.net/

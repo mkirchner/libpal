@@ -1,0 +1,54 @@
+$Id: README,v 1.6 2002/05/06 15:43:15 mkirchner Exp $
+
+-=[ Introduction ]=-
+
+Libpal is inteded to be an easy-to-use packet assembly library. It provides
+an interface consinsting of several functions which can be found in packet.h.
+Documentation is located in doc/. Still not enough, but should get most people
+started. Please contribute!
+
+-=[ Constraints ]=-
+
+At the moment the only supported platform is Linux/i386. I hope this will soon
+change. 
+
+-=[ How to compile ]=-
+
+On Linux/i386:
+
+	To change installation target directory, please edit the
+	PREFIX variable in "Makefile". Default is /usr/local
+	Using "make" both, shared as well as static libraries will
+	be built and installed.
+	Use "make shared" or "make static" if you want only shared/
+	static libs to be built.
+
+	make
+	su -
+	make install
+
+On other platforms: 	1. modify code until it works
+			2. modify Makefile
+			3. compile
+			4. test
+			5. mailto: kirchner@stud.fh-heilbronn.de
+			6. or join libpal development @ sourceforge
+			7. thanks.
+
+-=[ Comments ]=-
+
+Any help is appreciated.
+kirchner@stud.fh-heilbronn.de
+
+-=[ History ]=-
+
+v0.1.3a:	* added IP option support
+
+v0.1.2a:	* all kinds of ICMP packets can now be generated
+		* included some lines of documentation.
+		* IP options support still missing - next thing to be done 
+
+v0.1.1a:	ICMP support included. Still much to be done.
+
+v0.1a:		initial release. no ICMP support, platform Linux/i386
+
